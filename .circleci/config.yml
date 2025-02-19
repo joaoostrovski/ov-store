@@ -48,15 +48,44 @@ jobs:
             - tag_info.txt
 
       - run:
-          name: Push to Test if Build and Tests Succeed
-          when: on_success
+          name: Install GitHub CLI
+          command: |
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt update
+            sudo apt install gh -y
+
+      - run:
+          name: Configure Git and Authenticate GitHub CLI
           command: |
             git config --global user.email "youremail@example.com"
             git config --global user.name "YourName"
-            git remote set-url origin https://${GITHUB_TOKEN}@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git
-            git checkout test
+            echo "${GITHUB_TOKEN}" | gh auth login --with-token
+
+      - run:
+          name: Push to Test if Build and Tests Succeed
+          when: on_success
+          command: |
+            git remote set-url origin https://$GITHUB_TOKEN@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git
+            git fetch origin
+            git checkout test || git checkout -b test origin/test
+            set +e
             git merge --no-ff --no-edit $CIRCLE_BRANCH
-            git push origin test
+            MERGE_EXIT_CODE=$?
+            set -e
+            if [ $MERGE_EXIT_CODE -ne 0 ]; then
+              echo "Merge conflict detected when merging $CIRCLE_BRANCH into test. Creating a pull request."
+              git merge --abort
+              EXISTING_PR=$(gh pr list --base test --head $CIRCLE_BRANCH --state open --json number --jq '.[0].number')
+              if [ "$EXISTING_PR" != "null" ] && [ -n "$EXISTING_PR" ]; then
+                echo "A pull request already exists: #$EXISTING_PR"
+              else
+                gh pr create --base test --head $CIRCLE_BRANCH --title "Automated PR: Merge $CIRCLE_BRANCH into test" --body "Merge conflict detected during CI. Please resolve conflicts."
+              fi
+            else
+              git push origin test
+            fi
 
   deploy:
     docker:
@@ -74,36 +103,60 @@ jobs:
             echo "TAG is ${TAG}"
 
       - run:
-          name: Set up Git
+          name: Install GitHub CLI
+          command: |
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt update
+            sudo apt install gh -y
+
+      - run:
+          name: Configure Git and Authenticate GitHub CLI
           command: |
             git config --global user.email "youremail@example.com"
             git config --global user.name "YourName"
-            git remote set-url origin https://${GITHUB_TOKEN}@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git
+            echo "${GITHUB_TOKEN}" | gh auth login --with-token
+            git remote set-url origin https://$GITHUB_TOKEN@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git
 
       - run:
           name: Conditional Deployment
           command: |
             if [ -n "${TAG}" ]; then
               echo "Tag detected: ${TAG}"
-              # Merge test into master
               git fetch origin
-              git checkout master
+              git checkout master || git checkout -b master origin/master
+              set +e
               git merge --no-ff --no-edit origin/test
-              git push origin master
+              MERGE_EXIT_CODE=$?
+              set -e
+              if [ $MERGE_EXIT_CODE -ne 0 ]; then
+                echo "Merge conflict detected when merging test into master. Creating a pull request."
+                git merge --abort
+                EXISTING_PR=$(gh pr list --base master --head test --state open --json number --jq '.[0].number')
+                if [ "$EXISTING_PR" != "null" ] && [ -n "$EXISTING_PR" ]; then
+                  echo "A pull request already exists: #$EXISTING_PR"
+                else
+                  gh pr create --base master --head test --title "Automated PR: Merge test into master" --body "Merge conflict detected during CI. Please resolve conflicts."
+                fi
+                exit 0
+              else
+                git push origin master
 
-              # Create a release
-              curl -X POST \
-                -H "Authorization: token ${GITHUB_TOKEN}" \
-                -H "Content-Type: application/json" \
-                -d '{
-                  "tag_name": "'"${TAG}"'",
-                  "target_commitish": "master",
-                  "name": "'"${TAG}"'",
-                  "body": "Release of version '"${TAG}"'",
-                  "draft": false,
-                  "prerelease": false
-                }' \
-                https://api.github.com/repos/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/releases
+                # Create a release
+                curl -X POST \
+                  -H "Authorization: token ${GITHUB_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d '{
+                    "tag_name": "'"${TAG}"'",
+                    "target_commitish": "master",
+                    "name": "'"${TAG}"'",
+                    "body": "Release of version '"${TAG}"'",
+                    "draft": false,
+                    "prerelease": false
+                  }' \
+                  https://api.github.com/repos/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/releases
+              fi
             else
               echo "No tag detected. Skipping merge to master and release creation."
             fi
