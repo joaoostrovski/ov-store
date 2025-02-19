@@ -6,7 +6,9 @@ jobs:
       - image: cimg/openjdk:17.0
     steps:
       - checkout
+
       - setup_remote_docker
+
       - run:
           name: Start MariaDB
           command: >
@@ -14,51 +16,150 @@ jobs:
             -e MYSQL_ROOT_PASSWORD=root
             -e MYSQL_DATABASE=ov_store
             -p 3306:3306 mariadb:10.5
+
       - run:
           name: Wait for MariaDB to start
           command: sleep 30
+
       - run:
           name: Build with Maven
           command: mvn -B package --file pom.xml
+
       - run:
           name: Run tests with Maven
           command: mvn test
+
       - run:
-          name: Debug Variables
+          name: Check for Tags on Current Commit
           command: |
-            echo "Project Username: ${CIRCLE_PROJECT_USERNAME}"
-            echo "Project Reponame: ${CIRCLE_PROJECT_REPONAME}"
+            git fetch --tags
+            TAG=$(git tag --points-at HEAD)
+            echo "TAG=${TAG}" | tee tag_info.txt
+            echo "Tag on commit: ${TAG}"
+
+      - run:
+          name: Persist Tag Information
+          command: |
+            mkdir -p ~/workspace
+            mv tag_info.txt ~/workspace/
+      - persist_to_workspace:
+          root: ~/workspace
+          paths:
+            - tag_info.txt
+
+      - run:
+          name: Install GitHub CLI
+          command: |
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt update
+            sudo apt install gh -y
+
+      - run:
+          name: Configure Git and Authenticate GitHub CLI
+          command: |
+            git config --global user.email "youremail@example.com"
+            git config --global user.name "YourName"
+            echo "${GITHUB_TOKEN}" | gh auth login --with-token
+
       - run:
           name: Push to Test if Build and Tests Succeed
           when: on_success
           command: |
-            git config --global user.email "ojcroveda@gmail.com"
-            git config --global user.name "jota-br"
-            git remote set-url origin https://${GITHUB_TOKEN}@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git
-            git checkout test
+            git remote set-url origin https://$GITHUB_TOKEN@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git
+            git fetch origin
+            git checkout test || git checkout -b test origin/test
+            set +e
             git merge --no-ff --no-edit $CIRCLE_BRANCH
-            git push origin test
+            MERGE_EXIT_CODE=$?
+            set -e
+            if [ $MERGE_EXIT_CODE -ne 0 ]; then
+              echo "Merge conflict detected when merging $CIRCLE_BRANCH into test. Creating a pull request."
+              git merge --abort
+              EXISTING_PR=$(gh pr list --base test --head $CIRCLE_BRANCH --state open --json number --jq '.[0].number')
+              if [ "$EXISTING_PR" != "null" ] && [ -n "$EXISTING_PR" ]; then
+                echo "A pull request already exists: #$EXISTING_PR"
+              else
+                gh pr create --base test --head $CIRCLE_BRANCH --title "Automated PR: Merge $CIRCLE_BRANCH into test" --body "Merge conflict detected during CI. Please resolve conflicts."
+              fi
+            else
+              git push origin test
+            fi
 
   deploy:
     docker:
       - image: cimg/openjdk:17.0
     steps:
       - checkout
+
+      - attach_workspace:
+          at: ~/workspace
+
       - run:
-          name: Set up Git
+          name: Read Tag Information
           command: |
-            git config --global user.email "ojcroveda@gmail.com"
-            git config --global user.name "jota-br"
-            git remote set-url origin https://${GITHUB_TOKEN}@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git
+            source ~/workspace/tag_info.txt
+            echo "TAG is ${TAG}"
+
       - run:
-          name: Merge Test into Master and Create Release
-          when: on_success
+          name: Install GitHub CLI
           command: |
-            git checkout master
-            git fetch origin
-            git merge --no-ff --no-edit origin/test
-            git push origin master
-            curl -H "Authorization: token ${GITHUB_TOKEN}" -d '{ "tag_name": "'"$CIRCLE_TAG"'", "target_commitish": "master", "name": "'"$CIRCLE_TAG"'", "body": "'"$CIRCLE_TAG"'", "draft": false, "prerelease": false }' https://api.github.com/repos/jota-br/${CIRCLE_PROJECT_REPONAME}/releases
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt update
+            sudo apt install gh -y
+
+      - run:
+          name: Configure Git and Authenticate GitHub CLI
+          command: |
+            git config --global user.email "youremail@example.com"
+            git config --global user.name "YourName"
+            echo "${GITHUB_TOKEN}" | gh auth login --with-token
+            git remote set-url origin https://$GITHUB_TOKEN@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git
+
+      - run:
+          name: Conditional Deployment
+          command: |
+            if [ -n "${TAG}" ]; then
+              echo "Tag detected: ${TAG}"
+              git fetch origin
+              git checkout master || git checkout -b master origin/master
+              set +e
+              git merge --no-ff --no-edit origin/test
+              MERGE_EXIT_CODE=$?
+              set -e
+              if [ $MERGE_EXIT_CODE -ne 0 ]; then
+                echo "Merge conflict detected when merging test into master. Creating a pull request."
+                git merge --abort
+                EXISTING_PR=$(gh pr list --base master --head test --state open --json number --jq '.[0].number')
+                if [ "$EXISTING_PR" != "null" ] && [ -n "$EXISTING_PR" ]; then
+                  echo "A pull request already exists: #$EXISTING_PR"
+                else
+                  gh pr create --base master --head test --title "Automated PR: Merge test into master" --body "Merge conflict detected during CI. Please resolve conflicts."
+                fi
+                exit 0
+              else
+                git push origin master
+
+                # Create a release
+                curl -X POST \
+                  -H "Authorization: token ${GITHUB_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d '{
+                    "tag_name": "'"${TAG}"'",
+                    "target_commitish": "master",
+                    "name": "'"${TAG}"'",
+                    "body": "Release of version '"${TAG}"'",
+                    "draft": false,
+                    "prerelease": false
+                  }' \
+                  https://api.github.com/repos/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/releases
+              fi
+            else
+              echo "No tag detected. Skipping merge to master and release creation."
+            fi
 
 workflows:
   version: 2
@@ -71,6 +172,3 @@ workflows:
       - deploy:
           requires:
             - build_and_test
-          filters:
-            tags:
-              only: /^\d+\.\d+\.\d+$/
