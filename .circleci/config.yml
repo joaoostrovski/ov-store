@@ -5,7 +5,9 @@ jobs:
     docker:
       - image: cimg/openjdk:17.0
     steps:
-      - checkout
+      - checkout:
+          fetch-tags: true
+          depth: full
 
       - setup_remote_docker
 
