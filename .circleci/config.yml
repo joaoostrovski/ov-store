@@ -34,8 +34,11 @@ jobs:
       - run:
           name: Check for Tags on Current Commit
           command: |
-            git fetch --tags
-            TAG=$(git tag --points-at HEAD)
+            if [ -n "$CIRCLE_TAG" ]; then
+              TAG="$CIRCLE_TAG"
+            else
+              TAG=$(git tag --points-at HEAD)
+            fi
             echo "TAG=${TAG}" | tee tag_info.txt
             echo "Tag on commit: ${TAG}"
 
@@ -97,6 +100,10 @@ jobs:
 
       - attach_workspace:
           at: ~/workspace
+
+      - run:
+          name: Fetch Tags
+          command: git fetch --tags
 
       - run:
           name: Read Tag Information
@@ -170,6 +177,11 @@ workflows:
           filters:
             branches:
               only: dev
+            tags:
+              only: /.*/
       - deploy:
           requires:
             - build_and_test
+          filters:
+            tags:
+              only: /.*/
