@@ -178,8 +178,6 @@ workflows:
           filters:
             branches:
               only: dev
-            tags:
-              only: /.*/
       - deploy:
           requires:
             - build_and_test
