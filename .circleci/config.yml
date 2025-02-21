@@ -71,7 +71,7 @@ jobs:
           name: Push to Test if Build and Tests Succeed
           when: on_success
           command: |
-            git remote set-url origin https://$GITHUB_TOKEN@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git
+            git remote set-url origin https://${GITHUB_TOKEN}@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git
             git checkout test
             set +e
             git merge --no-ff --no-edit $CIRCLE_BRANCH
@@ -109,6 +109,7 @@ jobs:
           name: Read Tag Information
           command: |
             source ~/workspace/tag_info.txt
+            echo "export TAG=${TAG}" >> $BASH_ENV
             echo "TAG is ${TAG}"
 
       - run:
@@ -125,7 +126,7 @@ jobs:
           command: |
             git config --global user.email "ojcroveda@gmail.com"
             git config --global user.name "João Carlos Roveda Ostrovski"
-            git remote set-url origin https://$GITHUB_TOKEN@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git
+            git remote set-url origin https://${GITHUB_TOKEN}@github.com/${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}.git
 
       - run:
           name: Conditional Deployment
@@ -133,7 +134,7 @@ jobs:
             if [ -n "${TAG}" ]; then
               echo "Tag detected: ${TAG}"
               git fetch origin
-              git checkout master
+              git checkout -B master origin/master
               set +e
               git merge --no-ff --no-edit origin/test
               MERGE_EXIT_CODE=$?
