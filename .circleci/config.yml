@@ -5,8 +5,7 @@ jobs:
     docker:
       - image: cimg/openjdk:17.0
     steps:
-      - checkout:
-          fetch-tags: true
+      - checkout
 
       - setup_remote_docker
 
@@ -90,7 +89,9 @@ jobs:
     docker:
       - image: cimg/openjdk:17.0
     steps:
-      - checkout
+      - checkout:
+          fetch-tags: true
+          depth: full
 
       - attach_workspace:
           at: ~/workspace
@@ -149,7 +150,7 @@ jobs:
                     "tag_name": "'"${TAG}"'",
                     "target_commitish": "master",
                     "name": "'"${TAG}"'",
-                    "body": "Release of version '"${TAG}"'",
+                    "body": "'"${TAG}"'",
                     "draft": false,
                     "prerelease": false
                   }' \
